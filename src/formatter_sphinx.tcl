@@ -37,6 +37,10 @@ oo::class create ruff::formatter::Sphinx {
 
         return [make_id {*}$args]
     }
+    method Anchor args {
+        # Match the namespace targets produced by SymbolReference.
+        return [my MakeSphinxId namespace {*}$args]
+    }
 
     method HeadingReference {ns heading} {
         # Implements the [Formatter.HeadingReference] method for Sphinx.
@@ -44,9 +48,11 @@ oo::class create ruff::formatter::Sphinx {
     }
 
     method SymbolReference {ns symbol} {
-        # Implements the [Formatter.SymbolReference] method for Sphinx.
-
-        return [my MakeSphinxId $symbol]
+        # Namespace pages and program elements need distinct targets.
+        if {$ns eq $symbol} {
+            return [my MakeSphinxId namespace $symbol]
+        }
+        return [my MakeSphinxId symbol $symbol]
     }
 
     method FigureReference {ns caption} {
@@ -322,7 +328,7 @@ oo::class create ruff::formatter::Sphinx {
                     append Document "\n     -"
                 }
                 set first 0
-                set cell_text [my FormatInline $cell $scope]
+                set cell_text [my FormatInline [string trim $cell] $scope]
                 append Document " $cell_text"
             }
             append Document "\n"
@@ -337,7 +343,7 @@ oo::class create ruff::formatter::Sphinx {
                     append Document "\n     -"
                 }
                 set first 0
-                set cell_text [my FormatInline $cell $scope]
+                set cell_text [my FormatInline [string trim $cell] $scope]
                 append Document " $cell_text"
             }
             append Document "\n"
