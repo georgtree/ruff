@@ -754,8 +754,24 @@ oo::class create ruff::formatter::Formatter {
         } else {
             if {[info exists synopsis] && [llength $synopsis]} {
                 # Customized parameter list
-                foreach param_names $synopsis[set synopsis ""] {
-                    lappend synopsis "OBJECT $display_name" $param_names
+                set unqual_name [namespace tail $class]
+                set instance_name [string toupper $unqual_name]OBJ
+                switch -exact -- $proc_name {
+                    constructor {
+                        foreach param_names $synopsis[set synopsis ""] {
+                        set synopsis [list \
+                                          "$unqual_name create OBJNAME" \
+                                          $param_names \
+                                          "$unqual_name new" \
+                                          $param_names]
+                        }
+                    }
+                    destructor {set synopsis [list "$instance_name destroy"]}
+                    default {
+                        foreach param_names $synopsis[set synopsis ""] {
+                            lappend synopsis "[string toupper [namespace tail $class]]OBJ $display_name" $param_names
+                        }
+                    }
                 }
             } else {
                 set unqual_name [namespace tail $class]
