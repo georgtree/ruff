@@ -129,7 +129,7 @@ oo::class create ruff::formatter::Sphinx {
 
         set level    [dict get $HeaderLevels $type]
         set ns       [namespace qualifiers $fqn]
-        set anchor   [my MakeSphinxId $fqn]
+        set anchor   [my MakeSphinxId symbol $fqn]
         set exported_anchor [make_exported_id $fqn]
 
         # Track anchors for navigation
