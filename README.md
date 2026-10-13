@@ -167,3 +167,31 @@ This release mainly has cosmetic changes in presentation.
 
 NOTE 2.0 HAS SEVERAL INCOMPATIBILITIES VIS-A-VIS 1.x IN OPTIONS AND GENERATED
 OUTPUT FORMAT. See above Release notes for 2.0.
+
+## Nroff tables
+
+Nroff output renders tables as wrapped Unicode boxes, without requiring `tbl`.
+This works in document and namespace preambles, class preambles, procedure
+comments and method comments. Use normal Ruff table syntax; separate preamble
+conversion or temporary procedure rewriting is unnecessary.
+
+```tcl
+ruff::document ::mypackage -format nroff -tablewidth 100
+```
+
+`-tablewidth` includes borders and padding and defaults to 120 character columns.
+The CLI equivalent is `--nroff-table-width 100`. Cells wrap to fit, and column
+alignment markers are honored. Inline code and emphasis become plain text inside
+tables; links retain their labels and URLs. Use a UTF-8 manpage reader with a
+monospaced font. Widths count Tcl characters, so wide and combining Unicode
+characters may not align with terminal display columns.
+
+Run the Tcl regression tests from the repository root:
+
+```sh
+tclsh tests/nroff-tables.test
+```
+
+Tcllib must be available on `auto_path` or `TCLLIBPATH`. Tcl 9 enables the class
+preamble integration test. If `groff` is available, the suite also checks rendered
+UTF-8 man output without a table preprocessor.

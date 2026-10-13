@@ -19,6 +19,8 @@ oo::class create ruff::formatter::Nroff {
     variable HeaderLevels;    # Header levels for various headers
     variable SeeAlso;         # The See also section
 
+    variable TablePlain; # Suppress inline font escapes while measuring table cells
+
     variable Indentation; # How much to indent in nroff units
 
     constructor args {
@@ -31,6 +33,7 @@ oo::class create ruff::formatter::Nroff {
             nonav 5
             parameters 5
         }
+        set TablePlain false
         set Indentation 4n
         next {*}$args
     }
@@ -266,54 +269,33 @@ oo::class create ruff::formatter::Nroff {
         # `alignments` containing the raw lines, a list of cell content, header row,
         # and a list of cell alignments respectively.
         #
-        # Tables are exported using .TS macros which require `tbl` support.
-
+        # Render already-parsed cells, regardless of their documentation origin.
+        # Width is measured before nroff escaping and includes borders/padding.
         set rows [dict get $table rows]
+        set hasHeader [dict exists $table header]
+        if {$hasHeader} {
+            set rows [linsert $rows 0 [dict get $table header]]
+        }
+        if {![llength $rows]} {return}
 
-        # Need to find a separator character that does not occur in the text
-        # Pipe character repeated as first choice and last resort
-        foreach sep {| : ^ % ! |} {
-            if {[string first $sep $rows] < 0} {
-                break
+        set plain {}
+        set TablePlain true
+        try {
+            foreach row $rows {
+                lappend plain [lmap cell $row {
+                    my FormatInline [string trim $cell] $scope
+                }]
             }
+        } finally {
+            set TablePlain false
         }
-
-        if {[dict exists $table header]} {
-            set header [dict get $table header]
-            set ncols [llength $header]
-        } else {
-            set ncols [llength [lindex $rows 0]]
-        }
-
+        set alignments {}
         if {[dict exists $table alignments]} {
-            set tbl_alignments {}
-            foreach align [dict get $table alignments] {
-                switch $align {
-                    left   {lappend tbl_alignments l}
-                    center {lappend tbl_alignments c}
-                    right  {lappend tbl_alignments r}
-                    default  {lappend tbl_alignments l}
-                }
-            }
-        } else {
-            set tbl_alignments [lrepeat $ncols l]
+            set alignments [dict get $table alignments]
         }
-
-        append Body [nr_ts] \n
-        append Body "tab($sep) box;" \n
-        append Body "[join $tbl_alignments][nr_period]" \n
-        if {[info exists header]} {
-            append Body [join [lmap cell $header {
-                my FormatInline $cell $scope
-            }] $sep] \n
-            append Body _ \n; # Horizontal rule
-        }
-        foreach row $rows {
-            append Body [join [lmap cell $row {
-                my FormatInline $cell $scope
-            }] $sep] \n
-        }
-        append Body [nr_te] \n
+        set lines [table_render $plain [my Option -tablewidth 120] $hasHeader $alignments]
+        # No extra indentation: the width budget already includes the full box.
+        append Body [nr_p] [nr_nofill] \n [join $lines \n] \n [nr_fill]
         return
     }
 
@@ -418,6 +400,8 @@ oo::class create ruff::formatter::Nroff {
         #  scope - Documentation scope for resolving references.
         #
 
+        if {$TablePlain} {return [my FormatInline $text $scope]}
+
         # Note: reST does not support ***. Treat as **
         if {$delim eq "***"} {
             set delim "**"
@@ -453,6 +437,13 @@ oo::class create ruff::formatter::Nroff {
         set url [string trim $url {<> }]
         set text [my FormatInline $text $scope]
 
+        if {$TablePlain} {
+            if {$url ne "" && $text ne $url} {
+                return "$text \[URL: $url\]"
+            }
+            return $text
+        }
+
         # TBD - some nroff version support urls using .UR
         if {$url ne "" && $text ne $url} {
             return [string cat [nr_ulr $text] " \[URL: $url\]"]
@@ -468,6 +459,7 @@ oo::class create ruff::formatter::Nroff {
         #  title - not used
         #  scope - not used
         #  link_type - not used
+        if {$TablePlain} {return "[my FormatInline $text $scope] \[Image: $url\]"}
         app::log_error "Warning: Image URL $url found. Images are not supported for Nroff output."
         return [string cat $text " \[Image: $url\]"]
     }
@@ -475,6 +467,7 @@ oo::class create ruff::formatter::Nroff {
     method ProcessComment {text} {
         # Returns the markup for a comment.
         #
+        if {$TablePlain} {return ""}
         return [nr_comment $text]
     }
 
@@ -483,6 +476,7 @@ oo::class create ruff::formatter::Nroff {
         #
         # The default implementation assumes HTML output format. Derived classes
         # can override the method.
+        if {$TablePlain} {return $text}
         return [nr_ulr $text]
     }
 
@@ -685,5 +679,99 @@ namespace eval ruff::formatter::nroff {
 
         # Return the modified result buffer
         return [string trim [string map $finalMap $lines]]\n
+    }
+}
+
+namespace eval ruff::formatter::nroff {
+    # Share the available character columns fairly, keeping short cells compact.
+    proc table_widths {rows maxWidth} {
+        if {![string is integer -strict $maxWidth] || $maxWidth < 5} {
+            error "table width must be an integer of at least 5"
+        }
+        set columns [llength [lindex $rows 0]]
+        if {$columns == 0} {error "table must have at least one column"}
+        set budget [expr {$maxWidth - 3*$columns - 1}]
+        if {$budget < $columns} {
+            error "table has too many columns for width $maxWidth"
+        }
+        set wanted [lrepeat $columns 1]
+        foreach row $rows {
+            if {[llength $row] != $columns} {
+                error "table rows must have the same number of columns"
+            }
+            for {set c 0} {$c < $columns} {incr c} {
+                lset wanted $c [expr {max([lindex $wanted $c], [string length [lindex $row $c]])}]
+            }
+        }
+        set widths [lrepeat $columns 1]
+        incr budget -$columns
+        for {set target 2} {$target <= 24 && $budget > 0} {incr target} {
+            for {set c 0} {$c < $columns && $budget > 0} {incr c} {
+                if {[lindex $wanted $c] >= $target} {
+                    lset widths $c $target
+                    incr budget -1
+                }
+            }
+        }
+        while {$budget > 0} {
+            set best -1
+            set need 0
+            for {set c 0} {$c < $columns} {incr c} {
+                set extra [expr {[lindex $wanted $c] - [lindex $widths $c]}]
+                if {$extra > $need} {set best $c; set need $extra}
+            }
+            if {$best < 0} {break}
+            lset widths $best [expr {[lindex $widths $best] + 1}]
+            incr budget -1
+        }
+        return $widths
+    }
+
+    proc table_border {widths left middle right} {
+        set parts {}
+        foreach width $widths {
+            lappend parts [string repeat ─ [expr {$width + 2}]]
+        }
+        return "$left[join $parts $middle]$right"
+    }
+
+    # Cells are plain text; nroff escaping is applied later by nroff_postprocess.
+    proc table_render {rows maxWidth hasHeader alignments} {
+        set widths [table_widths $rows $maxWidth]
+        set result [list [table_border $widths ┌ ┬ ┐]]
+        set rowIndex 0
+        foreach row $rows {
+            set columns {}
+            set height 1
+            foreach cell $row width $widths {
+                set wrapped [split [::textutil::adjust::adjust $cell \
+                    -length $width -strictlength 1 -justify left] \n]
+                lappend columns $wrapped
+                set height [expr {max($height, [llength $wrapped])}]
+            }
+            for {set n 0} {$n < $height} {incr n} {
+                set rendered │
+                set c 0
+                foreach column $columns width $widths {
+                    set text [string trimright [lindex $column $n]]
+                    set padding [expr {$width - [string length $text]}]
+                    switch -- [lindex $alignments $c] {
+                        right {set left $padding}
+                        center {set left [expr {$padding / 2}]}
+                        default {set left 0}
+                    }
+                    append rendered " " [string repeat " " $left] $text \
+                        [string repeat " " [expr {$padding - $left}]] " │"
+                    incr c
+                }
+                lappend result $rendered
+            }
+            if {$hasHeader && $rowIndex == 0 && [llength $rows] > 1} {
+                lappend result [table_border $widths ├ ┼ ┤]
+            }
+            incr rowIndex
+        }
+        lappend result [table_border $widths └ ┴ ┘]
+        return $result
     }
 }

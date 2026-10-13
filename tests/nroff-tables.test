@@ -1,0 +1,228 @@
+package require tcltest 2
+namespace import ::tcltest::*
+source [file join [file dirname [info script]] .. src ruff.tcl]
+
+testConstraint Tcl9 [ruff::Tcl9]
+testConstraint groff [expr {[auto_execok groff] ne {}}]
+
+namespace eval ::tabletest {
+    variable dir [file join [::tcltest::temporaryDirectory] ruff-table-tests-[pid]]
+    proc render {text {format nroff} args} {
+        variable dir
+        file mkdir $dir
+        set file [file join $dir result.txt]
+        ruff::document ::tabletest::fixture -format $format -preamble $text \
+            -outdir $dir -outfile result.txt -makeindex false {*}$args
+        set f [open $file r]
+        try {return [read $f]} finally {close $f}
+    }
+    proc cells {text} {
+        lmap c [::ruff::private::split_table_row $text] {string trim $c}
+    }
+    namespace eval fixture {}
+}
+
+foreach {label row expected} {
+    ordinary {| a | b |} {a b}
+    empty {|a||c|} {a {} c}
+    emptyEdges {||b||} {{} b {}}
+    optionalTrailing {|a|b} {a b}
+    escaped {|a\|b|c|} {{a\|b} c}
+    code {|`a|b`|c|} {{`a|b`} c}
+    longCode {|``a`|b``|c|} {{``a`|b``} c}
+    unmatched {|`a|b|} {{`a} b}
+    unequalRuns {|`a|b``|c|} {{`a} {b``} c}
+} {
+    test table-cells-$label {cell boundaries respect escapes and code spans} \
+        -body [list ::tabletest::cells $row] -result [lrange $expected 0 end]
+}
+
+set basic {| Name | Value |
+| :--- | ---: |
+| `x` | **42** |}
+
+test table-box-1 {boxed, aligned, plain inline text; no tbl macros} -body {
+    set doc [::tabletest::render $basic]
+    list [string match {*┌──────┬───────┐*} $doc] \
+        [string match {*│ x    │    42 │*} $doc] \
+        [string match {*├──────┼───────┤*} $doc] \
+        [regexp -line {^\.T[SE]} $doc]
+} -result {1 1 1 0}
+
+test table-box-2 {headerless and empty cells} -body {
+    set doc [::tabletest::render {|a||c|
+||b||}]
+    list [regexp -all {┌} $doc] [string match {*│ a │   │ c │*} $doc] \
+        [string match {*│   │ b │   │*} $doc] [string first ├ $doc]
+} -result {1 1 1 -1}
+
+test table-box-3 {long words wrap and every box line fits the budget} -body {
+    set doc [::tabletest::render {|Key|Description|
+|---|---|
+|x|abcdefghijklmnopqrstuvwxyz repeated long description words|} nroff -tablewidth 30]
+    set lengths {}
+    foreach line [split $doc \n] {
+        if {[regexp {^[┌│├└]} $line]} {lappend lengths [string length $line]}
+    }
+    list [expr {[llength $lengths] > 5}] [lsort -unique $lengths]
+} -result {1 30}
+
+test table-box-4 {center and right alignment are honored} -body {
+    set doc [::tabletest::render {|Middle|Right|
+|:---:|---:|
+|x|1|}]
+    string match {*│   x    │     1 │*} $doc
+} -result 1
+
+test table-box-5 {links, variables, escapes and code remain readable} -body {
+    set doc [::tabletest::render {|Value|Meaning|
+|---|---|
+|`a|b`|c\|d|
+|$value|[site](https://example.org)|
+|`\path`|`.SH`|}]
+    list [string match {*a|b*} $doc] [string match {*c|d*} $doc] \
+        [string match {*$value*} $doc] [string match {*\[URL: https://example*} $doc] \
+        [expr {[string first {\\path} $doc] >= 0}] \
+        [expr {[string first {\&.SH} $doc] >= 0}]
+} -result {1 1 1 1 1 1}
+
+foreach {label width pattern} {
+    invalid abc {*integer of at least 5*}
+    small 4 {*integer of at least 5*}
+    columns 8 {*too many columns*}
+} {
+    test table-width-$label {invalid width is diagnosed} \
+        -body [list ::tabletest::render $basic nroff -tablewidth $width] \
+        -returnCodes error -match glob -result $pattern
+}
+
+test table-shape-1 {ragged rows are diagnosed} -body {
+    ::tabletest::render {|A|B|
+|---|---|
+|one|}
+} -returnCodes error -result {table rows must have the same number of columns}
+
+test table-guards-1 {format guards and fenced examples are not converted} -body {
+    set doc [::tabletest::render {#ruffopt excludedformats nroff
+|Hidden|Table|
+|---|---|
+|secret|secret|
+#ruffopt excludedformats {}
+```
+|Literal|Example|
+|---|---|
+```
+
+|Shown|Table|
+|---|---|
+|yes|yes|}]
+    list [regexp -all {┌} $doc] [string match {*|Literal|Example|*} $doc] \
+        [string match {*secret*} $doc] [string match {*Shown*} $doc]
+} -result {1 1 0 1}
+
+test table-origins-1 {document/namespace/class preambles, procedures, methods and later ruff blocks} \
+    -constraints Tcl9 -setup {
+    namespace eval ::tabletest::fixture {
+        variable _ruff_preamble {|Namespace|Value|
+|---|---|
+|namespaceCell|value|}
+        proc example {} {
+            # Procedure documentation.
+            #
+            # |Procedure|Value|
+            # |---|---|
+            # |procedureCell|value|
+            set value 1
+            #ruff
+            # |Later|Value|
+            # |---|---|
+            # |laterCell|value|
+            return $value
+        }
+        oo::class create Example {
+            classmethod _ruffClassHook {} {
+                return {preamble {|Class|Value|
+|---|---|
+|classCell|value|}}
+            }
+            method example {} {
+                # Method documentation.
+                #
+                # |Method|Value|
+                # |---|---|
+                # |methodCell|value|
+                return ok
+            }
+        }
+    }
+    set original [info body ::tabletest::fixture::example]
+    set method [info class definition ::tabletest::fixture::Example example]
+} -body {
+    set doc [::tabletest::render {|Document|Value|
+|---|---|
+|documentCell|value|}]
+    set found {}
+    foreach value {documentCell namespaceCell classCell procedureCell methodCell laterCell} {
+        lappend found [string match *$value* $doc]
+    }
+    list $found [regexp -all {┌} $doc] \
+        [expr {$original eq [info body ::tabletest::fixture::example]}] \
+        [expr {$method eq [info class definition ::tabletest::fixture::Example example]}]
+} -cleanup {
+    ::tabletest::fixture::Example destroy
+    rename ::tabletest::fixture::example {}
+    unset ::tabletest::fixture::_ruff_preamble
+} -result {{1 1 1 1 1 1} 6 1 1}
+
+test table-other-1 {HTML still receives tables, not boxes} -body {
+    set doc [::tabletest::render $basic html]
+    list [string match {*<table*} $doc] [string match {*<strong>42</strong>*} $doc] \
+        [string first ┌ $doc]
+} -result {1 1 -1}
+
+test table-other-2 {Markdown retains original table lines} -body {
+    set doc [::tabletest::render $basic markdown]
+    list [expr {[string first $basic $doc] >= 0}] [string first ┌ $doc]
+} -result {1 -1}
+
+test table-other-3 {Sphinx retains list-table output} -body {
+    set doc [::tabletest::render $basic sphinx]
+    list [string match {*.. list-table::*} $doc] [string first ┌ $doc]
+} -result {1 -1}
+
+test table-cli-1 {CLI width maps to the document option} -body {
+    lassign [::ruff::private::parse_options {--nroff-table-width 72 ::tabletest::fixture}] ns options
+    dict get $options -tablewidth
+} -result 72
+
+
+test table-header-only-1 {header-only table has a closed box} -body {
+    set doc [::tabletest::render {|A|B|
+|---|---|}]
+    list [regexp -all {┌} $doc] [regexp -all {└} $doc] [string first ├ $doc]
+} -result {1 1 -1}
+
+test table-fonts-1 {normal inline formatting resumes after a table} -body {
+    set doc [::tabletest::render "$basic\n\n**After**"]
+    expr {[string first {\fBAfter\fP} $doc] >= 0}
+} -result 1
+
+test table-many-columns-1 {more than four columns and minimum width} -body {
+    set doc [::tabletest::render {|a|b|c|d|e|} nroff -tablewidth 21]
+    string match {*│ a │ b │ c │ d │ e │*} $doc
+} -result 1
+
+test table-groff-1 {UTF-8 man output needs no tbl and preserves literal content} \
+    -constraints groff -body {
+    ::tabletest::render {|Name|Value|
+|---|---|
+|`a|b`|`.SH`|
+|path|`\path`|} nroff -tablewidth 50
+    set output [exec groff -Kutf8 -Tutf8 -man [file join $::tabletest::dir result.txt]]
+    list [string match {*┌*┐*} $output] [string match {*a|b*} $output] \
+        [expr {[string first {.SH} $output] >= 0}] \
+        [expr {[string first {\path} $output] >= 0}]
+} -result {1 1 1 1}
+
+file delete -force $::tabletest::dir
+cleanupTests

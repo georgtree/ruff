@@ -165,6 +165,8 @@ namespace eval ruff {
                                        multiple namespaces.
               --punctuate              Capitalize and add periods as necessary.
           -r, --recurse                Recurse passed namespaces.
+              --nroff-table-width=N    Maximum table width including borders and
+                                       padding (default 120 character columns).
               --nroff-section=SECTION  The manpage section to be used by the Nroff
                                        formatter. Defaults to 3tcl.
               --sort-namespaces        Sort the namespaces in the navigation. By
@@ -375,9 +377,11 @@ namespace eval ruff {
         is passed to another Markdown processor, the latter may not support
         tables without headers.
 
-        In the case of the `nroff` output, the `tbl` program needs to be used to
-        format the table. On many systems, `man` and `nroff` will automatically
-        invoke it if necessary.
+        For `nroff` output, tables are rendered as wrapped Unicode boxes without
+        requiring `tbl`. This applies to document and namespace preambles, class
+        preambles, procedures and methods. See [Nroff formatter] for width settings.
+        Pipes escaped as `\|` or inside matched inline-code backticks remain within
+        their cell. A leading pipe is required; the trailing pipe is optional.
 
         Not all formatters support alignment of columns.
 
@@ -947,8 +951,24 @@ namespace eval ruff {
         or as a page per namespace with the `-pagesplit namespace` option.
         It does not support inline HTML, navigation links or table of contents.
 
-        The Nroff formatter does not support images and links. Table support
-        requires presence of the `tbl` program.
+        The Nroff formatter does not support images and navigation links.
+        Tables use Unicode box-drawing characters in no-fill mode and do not need
+        the `tbl` preprocessor. Use a UTF-8 manpage reader and a monospaced font.
+
+        The `-tablewidth` option to [document] (command line `--nroff-table-width`)
+        sets the maximum table width in character columns, including borders and
+        padding; the default is 120. Short columns stay compact and long cells wrap,
+        including long words. Header alignment markers are honored. Headerless
+        tables are also supported. A width too small for the number of columns
+        or inconsistent row lengths produces an error.
+
+        Inline code and emphasis in table cells are rendered as plain text before
+        measuring widths; links retain their text and URL. Literal punctuation and
+        backslashes are escaped for nroff after layout. Width measurement uses Tcl
+        character counts, not terminal display widths for wide or combining glyphs.
+        Reduce the width for narrower terminals. Other output formats are unaffected;
+        fenced examples remain literal. No preamble conversion or temporary procedure
+        rewriting is needed.
 
         ### Sphinx formatter
 
@@ -1471,10 +1491,43 @@ proc ruff::private::split_table_row {line} {
     #   line - presumed to have Markdown table row syntax
     # Returns a list of cell content
 
-    # insert a space between || to handle empty cells
-    return [regexp -inline -all {(?:[^|]|\\\|)+} \
-                [regsub -all {\|(?=\|)} \
-                     [string trim $line] {| }]]
+    # Preserve cell text for formatters, but ignore pipes escaped with a
+    # backslash or enclosed in a matched, equal-length backtick pair.
+    set line [string trim $line]
+    set cells {}
+    set cell {}
+    set code {}
+    set trailingSeparator false
+    for {set i 0} {$i < [string length $line]} {incr i} {
+        set ch [string index $line $i]
+        set trailingSeparator false
+        if {$ch eq "\\" && $i + 1 < [string length $line]} {
+            append cell $ch [string index $line [incr i]]
+        } elseif {$ch eq "`"} {
+            set run `
+            while {[string index $line [expr {$i + 1}]] eq "`"} {
+                append run `
+                incr i
+            }
+            if {$code eq {}} {
+                # A longer run is not a closing delimiter for a shorter run.
+                foreach candidate [regexp -all -inline {`+} [string range $line [expr {$i + 1}] end]] {
+                    if {$candidate eq $run} {set code $run; break}
+                }
+            } elseif {$code eq $run} {
+                set code {}
+            }
+            append cell $run
+        } elseif {$ch eq "|" && $code eq {}} {
+            if {$i != 0} {lappend cells $cell}
+            set cell {}
+            set trailingSeparator true
+        } else {
+            append cell $ch
+        }
+    }
+    if {!$trailingSeparator} {lappend cells $cell}
+    return $cells
 }
 
 proc ruff::private::parse_line {line mode current_indent}  {
@@ -3507,6 +3560,8 @@ proc ruff::document {namespaces args} {
     #  `3tcl`.
     # -sortnamespaces BOOLEAN - If `true` (default) the namespaces are
     #  sorted in the navigation otherwise they are in the order passed in.
+    # -tablewidth COLUMNS - Maximum nroff table width, including borders and padding.
+    #  Defaults to 120; must be an integer of at least 5. Other formatters ignore it.
     # -title TITLE - This text is shown in a formatter-specific area on every
     #  generated page. The `nroff` formatter for manpages has only a limited
     #  space to display this so `TITLE` should be limited to roughly 50 characters
@@ -4196,6 +4251,11 @@ proc ruff::private::parse_options {argv} {
         -r - --recurse {
             # Recurse passed namespaces.
             lappend options -recurse $arg
+        }
+        --nroff-table-width:COLUMNS {
+            # Maximum Nroff table width, including borders and padding.
+            # Defaults to 120 character columns.
+            lappend options -tablewidth $arg
         }
         --nroff-section:SECTION {
             # The manpage section to be used by the Nroff
