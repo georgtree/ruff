@@ -397,7 +397,14 @@ oo::class create ruff::formatter::Sphinx {
         #  fence_options - options controlling generation and layout
         #  scope - The documentation scope of the content.
         # Uses Sphinx code-block directive with enhanced options.
-
+        if {[dict exists $fence_options Language] && [dict get $fence_options Language] eq "math"} {
+            append Document "\n.. math::\n\n"
+            foreach line $lines {
+                append Document "   $line\n"
+            }
+            append Document "\n"
+            return
+        }
         # Process caption
         if {[dict exists $fence_options -caption]} {
             set caption [dict get $fence_options -caption]
