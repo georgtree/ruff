@@ -1,0 +1,116 @@
+package require tcltest 2
+namespace import ::tcltest::*
+source [file join [file dirname [info script]] .. src ruff.tcl]
+testConstraint Tcl9 [ruff::Tcl9]
+namespace eval ::dmtest {
+    variable dir [file join [::tcltest::temporaryDirectory] display-math-[pid]]
+    variable equation {```math
+\Delta x = \frac{x_1}{x_2}
+```}
+    namespace eval fixture {}
+    proc render {format text args} {
+        variable dir
+        ruff::document ::dmtest::fixture -format $format -preamble $text \
+            -outdir $dir -outfile result.rst -makeindex false {*}$args
+        set f [open [file join $dir result.rst]]
+        try {return [read $f]} finally {close $f}
+    }
+}
+
+test display-html-1 {display-only page loads MathJax and preserves TeX} -body {
+    set doc [::dmtest::render html $::dmtest::equation]
+    list [expr {[string first {\[\Delta x = \frac{x_1}{x_2}\]} $doc] >= 0}] \
+        [regexp -all {<script defer src=.*mathjax} $doc] \
+        [string match {*language-math*} $doc]
+} -result {1 1 0}
+
+test display-html-2 {HTML content is escaped} -body {
+    set doc [::dmtest::render html {```math
+x < y & z > 0
+```}]
+    string match {*x &lt; y &amp; z &gt; 0*} $doc
+} -result 1
+
+test display-html-3 {mixed inline/display math loads one script} -body {
+    regexp -all {<script defer src=.*mathjax} \
+        [::dmtest::render html "Inline `x`\{math\}.\n\n$::dmtest::equation"]
+} -result 1
+
+test display-html-4 {custom script and disabled script} -body {
+    set custom [::dmtest::render html $::dmtest::equation -mathjaxpath assets/mathjax.js]
+    set disabled [::dmtest::render html $::dmtest::equation -mathjaxpath {}]
+    list [string match {*src="assets/mathjax.js"*} $custom] \
+        [string match {*<script defer*} $disabled] [string match {*class="ruff-math"*} $disabled]
+} -result {1 0 1}
+
+test display-md-1 {Markdown emits display delimiters with unescaped TeX} -body {
+    set doc [::dmtest::render markdown $::dmtest::equation]
+    expr {[string first {$$
+\Delta x = \frac{x_1}{x_2}
+$$} $doc] >= 0}
+} -result 1
+
+test display-adoc-1 {AsciiDoc STEM block and configuration} -body {
+    set doc [::dmtest::render asciidoctor $::dmtest::equation]
+    list [string match {*:stem: latexmath*} $doc] [expr {[string first {[stem]
+++++
+\Delta x = \frac{x_1}{x_2}
+++++} $doc] >= 0}]
+} -result {1 1}
+
+test display-adoc-2 {passthrough delimiter collision} -body {
+    set doc [::dmtest::render asciidoctor {```math
+++++
+x=1
+```}]
+    expr {[string first {[stem]
++++++
+++++
+x=1
++++++} $doc] >= 0}
+} -result 1
+
+test display-sphinx-1 {existing native Sphinx output is preserved} -body {
+    set doc [::dmtest::render sphinx $::dmtest::equation]
+    list [string match {*.. math::*} $doc] [string match {*.. code-block:: math*} $doc] \
+        [expr {[string first {\Delta x = \frac{x_1}{x_2}} $doc] >= 0}]
+} -result {1 0 1}
+
+test display-nroff-1 {nroff retains literal TeX} -body {
+    set doc [::dmtest::render nroff $::dmtest::equation]
+    list [expr {[string first {\\Delta x = \\frac{x_1}{x_2}} $doc] >= 0}] \
+        [string match {*mathjax*} $doc]
+} -result {1 0}
+
+test display-guards-1 {separate text equation for nroff} -body {
+    set source "#ruffopt excludedformats nroff\n$::dmtest::equation\n#ruffopt includedformats nroff\n```\nTEXT EQUATION\n```\n#ruffopt excludedformats {}"
+    set nr [::dmtest::render nroff $source]
+    set html [::dmtest::render html $source]
+    list [string match {*TEXT EQUATION*} $nr] [string match {*frac*} $nr] \
+        [string match {*TEXT EQUATION*} $html] [string match {*class="ruff-math"*} $html]
+} -result {1 0 0 1}
+
+test display-code-1 {ordinary code blocks unchanged and do not load MathJax} -body {
+    set source {```tcl
+puts hello
+```}
+    set html [::dmtest::render html $source]
+    set md [::dmtest::render markdown $source]
+    set adoc [::dmtest::render asciidoctor $source]
+    list [string match {*language-tcl*} $html] [string match {*mathjax*} $html] \
+        [expr {[string first $source $md] >= 0}] [string match {*\[source,tcl\]*} $adoc]
+} -result {1 0 1 1}
+
+test display-caption-1 {HTML Markdown and AsciiDoc retain captions} -body {
+    set source {```math -caption "Equation caption"
+x=1
+```}
+    set found {}
+    foreach format {html markdown asciidoctor} {
+        lappend found [string match {*Equation caption*} [::dmtest::render $format $source]]
+    }
+    set found
+} -result {1 1 1}
+
+file delete -force $::dmtest::dir
+cleanupTests

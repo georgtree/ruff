@@ -381,9 +381,24 @@ oo::class create ruff::formatter::Asciidoctor {
             set anchor ""
         }
 
-        # Check if this is a diagram
-        if {[dict exists $fence_options Command] &&
-            [lindex [dict get $fence_options Command] 0] eq "diagram"} {
+        # Render display math before checking diagram transforms.
+        if {[dict get $fence_options Language] eq "math"} {
+            set MathUsed true
+            append Document "\n"
+            if {$anchor ne {}} {
+                my AddAnchor $anchor
+            }
+            if {$display_caption ne {}} {
+                append Document ".$display_caption\n"
+            }
+            # A longer passthrough delimiter avoids conflicts with literal lines.
+            set delimiter ++++
+            while {[lsearch -exact $lines $delimiter] >= 0} {
+                append delimiter +
+            }
+            append Document {[stem]} \n $delimiter \n [join $lines \n] \n $delimiter "\n\n"
+        } elseif {[dict exists $fence_options Command] &&\
+                          [lindex [dict get $fence_options Command] 0] eq {diagram}} {
             set diagrammer [lrange [dict get $fence_options Command] 1 end]
             if {[llength $diagrammer] == 0} {
                 set diagrammer [program_option -diagrammer]

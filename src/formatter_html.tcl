@@ -8,7 +8,7 @@ oo::class create ruff::formatter::Html {
     superclass ::ruff::formatter::Formatter
 
     # Data members
-    variable MathUsed;        # Load MathJax only on pages with inline math
+    variable MathUsed;        # Load MathJax only on pages with math
     variable Document;        # Current document
     variable DocumentNamespace; # Namespace being documented
     variable Header;          # Common header
@@ -565,7 +565,12 @@ oo::class create ruff::formatter::Html {
         if {[dict exists $fence_options -align]} {
             append fig_classes " ruff-[dict get $fence_options -align]"
         }
-        if {[dict exists $fence_options Command] &&
+        if {$language eq "math"} {
+            set MathUsed true
+            append Document "\n<figure $id class='$fig_classes'>"
+            append Document [string cat {<div class="ruff-math">\[} \
+                [my Escape [join $lines \n]] {\]</div>}]
+        } elseif {[dict exists $fence_options Command] &&
             [lindex [dict get $fence_options Command] 0] eq "diagram"} {
             set diagrammer [lrange [dict get $fence_options Command] 1 end]
             if {[llength $diagrammer] == 0} {

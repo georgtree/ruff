@@ -322,7 +322,12 @@ oo::class create ruff::formatter::Markdown {
         # that looks like a fence.
         set fence [dict get $fence_options Fence]
         set lang [dict get $fence_options Language]
-        append Document \n $fence$lang \n [join $lines \n] \n $fence \n
+        if {$lang eq "math"} {
+            append Document "\n\n" {$$} \n [join $lines \n] \n {$$} "\n\n"
+        } else {
+            append Document \n $fence$lang \n [join $lines \n] \n $fence \n
+        }
+
         if {[dict exists $fence_options -caption]} {
             append Document \n\n* [dict get $fence_options -caption] *\n\n
         }

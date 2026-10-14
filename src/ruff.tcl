@@ -340,6 +340,44 @@ namespace eval ruff {
         * All other lines begin a normal paragraph. The paragraph ends with
         a line of one of the above types.
 
+        ### Display mathematics
+
+        Use a fenced block with the language `math` for a display equation. Supply
+        only the TeX content, without surrounding dollar signs or display delimiters:
+
+        ````nolang
+        ```math
+        \Delta x = \frac{x_1}{x_2}
+        ```
+        ````
+
+        HTML emits MathJax display delimiters and loads the configured MathJax
+        script, including on pages containing only display math. Markdown emits
+        a dollar-delimited display block; its consuming renderer must support math.
+        AsciiDoc emits a STEM passthrough block with LaTeX configured. Sphinx
+        continues to emit its native math directive, using the math renderer enabled
+        in `conf.py`. Ordinary code fences and diagram processing are unchanged.
+
+        Nroff prints the TeX source literally. To retain a separate text equation,
+        select variants with format guards:
+
+        ````nolang
+        #ruffopt excludedformats nroff
+        ```math
+        \Delta x = \frac{x_1}{x_2}
+        ```
+        #ruffopt includedformats nroff
+        ```
+        Delta x = x_1 / x_2
+        ```
+        #ruffopt excludedformats {}
+        ````
+
+        These guards apply to Ruff output formats, not Sphinx builders. They replace
+        the previous format selection; restore an enclosing selection explicitly
+        if it differs from the unrestricted default shown here. In procedure or
+        method comments, write directive lines as `#ruffopt ...`, not `# #ruffopt ...`.
+
         ### Inline mathematics
 
         Append `{math}` immediately after a backtick span to render its contents
@@ -3619,7 +3657,7 @@ proc ruff::document {namespaces args} {
     #  locale for a language, create a message catalog file in the `msgs`
     #  directory using the provided `de.msg` as a template. Only supported by the
     #  HTML formatter.
-    # -mathjaxpath URL - MathJax script URL/path for standalone HTML inline math.
+    # -mathjaxpath URL - MathJax script URL/path for standalone HTML math.
     #  Defaults to the MathJax 3 tex-mml-chtml bundle on jsDelivr. An empty string
     #  disables script insertion when the embedding page loads MathJax itself.
     #  Sphinx uses its own conf.py configuration instead.
@@ -4354,7 +4392,7 @@ proc ruff::private::parse_options {argv} {
             lappend options -recurse $arg
         }
         --mathjax-path:URL {
-            # MathJax script URL/path for standalone HTML inline math.
+            # MathJax script URL/path for standalone HTML math.
             lappend options -mathjaxpath $arg
         }
         --nroff-table-width:COLUMNS {

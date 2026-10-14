@@ -217,3 +217,23 @@ math, and AsciiDoc emits LaTeX STEM macros; the consuming renderer must support 
 
 Run `tclsh tests/inline-math.test` and `tclsh tests/nroff-tables.test` with Tcllib
 available. The inline suite also builds Sphinx HTML when `sphinx-build` is on PATH.
+
+## Display math
+
+Use a fenced `math` block containing TeX without surrounding display delimiters:
+
+````text
+```math
+\Delta x = \frac{x_1}{x_2}
+```
+````
+
+HTML renders it with MathJax, Markdown emits `$$` blocks, and AsciiDoc emits LaTeX
+STEM blocks. Sphinx retains its native `.. math::` output. Standalone HTML uses the
+same `-mathjaxpath` option as inline math; Sphinx uses its own `conf.py` settings.
+
+Nroff keeps the TeX as literal text. Use `#ruffopt excludedformats nroff` for the
+math block and `#ruffopt includedformats nroff` for your existing text equation,
+then restore the enclosing format selection. Other code fences remain unchanged.
+
+Run `tclsh tests/display-math.test` for the display-math regression suite.
