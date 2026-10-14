@@ -8,6 +8,7 @@ oo::class create ruff::formatter::Html {
     superclass ::ruff::formatter::Formatter
 
     # Data members
+    variable MathUsed;        # Load MathJax only on pages with inline math
     variable Document;        # Current document
     variable DocumentNamespace; # Namespace being documented
     variable Header;          # Common header
@@ -43,6 +44,11 @@ oo::class create ruff::formatter::Html {
             set SourceIdCounter 0
         }
         return [incr SourceIdCounter]
+    }
+
+    method ProcessMath {text fallback scope} {
+        set MathUsed true
+        return [string cat {<span class="ruff-math">\(} [my Escape $text] {\)</span>}]
     }
 
     method Anchor args {
@@ -175,6 +181,7 @@ oo::class create ruff::formatter::Html {
         next $ns
 
         set    NavigationLinks [dict create]
+        set MathUsed false
         set    Document $Header
         append Document "<main class='ruff-layout-main ruff-bd'>"
         set    DocumentNamespace $ns
@@ -189,6 +196,12 @@ oo::class create ruff::formatter::Html {
 
         # Add the navigation bits and footer
         my Navigation $DocumentNamespace
+        if {$MathUsed} {
+            set path [my Option -mathjaxpath https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js]
+            if {$path ne {}} {
+                append Document "<script defer src=\"[my Escape $path]\"></script>\n"
+            }
+        }
         append Document $Footer
 
         next

@@ -586,6 +586,13 @@ oo::class create ruff::formatter::Sphinx {
         }
     }
 
+    method ProcessMath {text fallback scope} {
+        # Sphinx's math role restores backslashes. Keep TeX backslashes
+        # unchanged; only protect the role's closing delimiter.
+        set text [string map [list ` \\`] $text]
+        return [string cat {:math:`} $text `]
+    }
+
     method ProcessLiteral {text} {
         # Returns markup for literal text.
         #  text - string to be formatted as a literal

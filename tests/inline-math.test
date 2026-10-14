@@ -1,0 +1,178 @@
+package require tcltest 2
+namespace import ::tcltest::*
+source [file join [file dirname [info script]] .. src ruff.tcl]
+testConstraint Tcl9 [ruff::Tcl9]
+testConstraint sphinx [expr {[auto_execok sphinx-build] ne {}}]
+
+namespace eval ::imtest {
+    variable dir [file join [::tcltest::temporaryDirectory] inline-math-[pid]]
+    namespace eval fixture {}
+    proc render {format text args} {
+        variable dir
+        ruff::document ::imtest::fixture -format $format -preamble $text \
+            -outdir $dir -outfile result.rst -makeindex false {*}$args
+        set f [open [file join $dir result.rst]]
+        try {return [read $f]} finally {close $f}
+    }
+}
+
+test inline-sphinx-1 {native Sphinx role} -body {
+    string match {*:math:`x_1`*} [::imtest::render sphinx {Value `x_1`{math}.}]
+} -result 1
+
+test inline-nroff-1 {explicit fallback} -body {
+    set doc [::imtest::render nroff {Value `\frac{x}{y}`{math "x/y"}.}]
+    list [string match {*x/y*} $doc] [string match {*frac*} $doc]
+} -result {1 0}
+
+test inline-nroff-2 {no fallback prints TeX} -body {
+    string match {*x_1*} [::imtest::render nroff {Value `x_1`{math}.}]
+} -result 1
+
+test inline-nroff-3 {empty fallback suppresses the expression} -body {
+    string match {*x_1*} [::imtest::render nroff {Value `x_1`{math ""}.}]
+} -result 0
+
+test inline-table-1 {pipes in formula and quoted fallback} -body {
+    set doc [::imtest::render nroff {|Value|Meaning|
+|---|---|
+|`|x|`{math "abs|x|"}|absolute value|}]
+    list [string match {*abs|x|*} $doc] [regexp -all {┌} $doc]
+} -result {1 1}
+
+test inline-table-2 {Sphinx role inside table} -body {
+    set doc [::imtest::render sphinx {|Value|Meaning|
+|---|---|
+|`x_1`{math}|coordinate|}]
+    list [string match {*.. list-table::*} $doc] [string match {*:math:`x_1`*} $doc]
+} -result {1 1}
+
+test inline-table-3 {Markdown table annotations are converted} -body {
+    set doc [::imtest::render markdown {|Value|Meaning|
+|---|---|
+|`|x|`{math}|absolute|}]
+    list [expr {[string first {$\vert x\vert $} $doc] >= 0}] [string match {*\{math\}*} $doc]
+} -result {1 0}
+
+test inline-html-1 {HTML escaped math and script} -body {
+    set doc [::imtest::render html {`x<y`{math}}]
+    list [expr {[string first {\(x&lt;y\)} $doc] >= 0}] [string match {*mathjax@3*} $doc]
+} -result {1 1}
+
+test inline-html-2 {no math means no MathJax script} -body {
+    string match {*mathjax@3*} [::imtest::render html {ordinary `code`}]
+} -result 0
+
+test inline-html-3 {local MathJax path} -body {
+    string match {*src="assets/mathjax.js"*} [::imtest::render html {`x`{math}} -mathjaxpath assets/mathjax.js]
+} -result 1
+
+test inline-adoc-1 {AsciiDoc math macro} -body {
+    string match {*latexmath:\[x_1\]*} [::imtest::render asciidoctor {`x_1`{math}}]
+} -result 1
+
+test inline-code-1 {unannotated code and unknown suffixes unchanged} -body {
+    set doc [::imtest::render sphinx {`x_1` and `x_2`{other} and `x_3`math}]
+    list [string match {*``x_1``*} $doc] [string match {*:math:*} $doc]
+} -result {1 0}
+
+test inline-code-2 {long code delimiters can contain backticks} -body {
+    string match {*a`b*} [::imtest::render nroff {``a`b``{math}}]
+} -result 1
+
+test inline-fence-1 {fenced examples are not parsed for inline math} -body {
+    string match {*:math:`x`*} [::imtest::render sphinx {```
+`x`{math}
+```}]
+} -result 0
+
+test inline-safe-1 {fallback is data, not script} -body {
+    set ::imtest::executed 0
+    ::imtest::render nroff {`x`{math {[set ::imtest::executed 1]}}}
+    set ::imtest::executed
+} -result 0
+
+test inline-bad-1 {invalid argument count} -body {
+    ::imtest::render nroff {`x`{math a b}}
+} -returnCodes error -match glob -result {*inline math expects*}
+
+test inline-bad-2 {unterminated annotation} -body {
+    ::imtest::render nroff "`x`\{math"
+} -returnCodes error -match glob -result {*unterminated inline math*}
+
+
+test inline-tex-1 {Sphinx preserves TeX backslashes exactly once} -body {
+    set doc [::imtest::render sphinx {`\frac{x_1}{x_2}`{math}}]
+    list [expr {[string first {:math:`\frac{x_1}{x_2}`} $doc] >= 0}] \
+        [expr {[string first {\\frac} $doc] >= 0}]
+} -result {1 0}
+
+test inline-escaped-1 {escaped annotation is ordinary text} -body {
+    string match {*:math:*} [::imtest::render sphinx {`x`\{math\}}]
+} -result 0
+
+test inline-fallback-1 {braces, quotes, escaped braces and pipes in fallbacks} -body {
+    set input [format {|Value|Description|
+|---|---|
+|`x`{math {a {b} | c}}|nested|
+|`x`{math "a %c | b"}|quoted|
+|`x`{math a\}}|escaped|} 125]
+    set doc [::imtest::render nroff $input]
+    list [string match {*a \{b\} | c*} $doc] [string match {*a \} | b*} $doc] \
+        [string match {*a\}*} $doc]
+} -result {1 1 1}
+
+test inline-origins-1 {namespace, class, procedure, method and parameter documentation} \
+    -constraints Tcl9 -setup {
+    namespace eval ::imtest::fixture {
+        variable _ruff_preamble {Namespace `n_1`{math}.}
+        proc example {arg} {
+            # Summary `s_1`{math}.
+            # arg - parameter `p_1`{math}
+            #
+            # Paragraph `q_1`{math}.
+        }
+        oo::class create Example {
+            classmethod _ruffClassHook {} {
+                return {preamble {Class `c_1`{math}.}}
+            }
+            method example {} {
+                # Method `m_1`{math}.
+            }
+        }
+    }
+} -body {
+    set doc [::imtest::render sphinx {Overview `o_1`{math}.}]
+    set found {}
+    foreach name {n_1 s_1 p_1 q_1 c_1 m_1 o_1} {
+        lappend found [expr {[string first ":math:`$name`" $doc] >= 0}]
+    }
+    set found
+} -cleanup {
+    ::imtest::fixture::Example destroy
+    rename ::imtest::fixture::example {}
+    unset ::imtest::fixture::_ruff_preamble
+} -result {1 1 1 1 1 1 1}
+
+test inline-sphinx-build-1 {Sphinx HTML preserves TeX in prose and tables} \
+    -constraints sphinx -body {
+    ::imtest::render sphinx {# Inline equations
+
+`\frac{x}{y}`{math}.
+
+|Value|Meaning|
+|---|---|
+|`\alpha_1`{math}|coordinate|}
+    set f [open [file join $::imtest::dir conf.py] a]
+    puts $f {extensions = ['sphinx.ext.mathjax']}
+    close $f
+    exec {*}[auto_execok sphinx-build] -q -W -E -b html $::imtest::dir [file join $::imtest::dir html]
+    set f [open [file join $::imtest::dir html result.html]]
+    set html [read $f]
+    close $f
+    list [expr {[string first {\(\frac{x}{y}\)} $html] >= 0}] \
+        [expr {[string first {\(\alpha_1\)} $html] >= 0}]
+} -result {1 1}
+
+file delete -force $::imtest::dir
+cleanupTests

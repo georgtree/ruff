@@ -1316,6 +1316,11 @@ oo::class create ruff::formatter::Formatter {
         }
     }
 
+    method ProcessMath {text fallback scope} {
+        # Default for non-math formatters: use the explicit fallback or TeX.
+        return [my ProcessLiteral $fallback]
+    }
+
     method ProcessLiteral {text} {
         # Returns markup for literal text.
         #  text - string to be formatted as a literal
@@ -1477,13 +1482,24 @@ oo::class create ruff::formatter::Formatter {
                     # Look for the matching backticks. If not found,
                     # we will not treat this as code. Otherwise pass through
                     # the entire match unchanged.
-                    if {[regexp -start $start -indices $backticks $text terminating_indices]} {
+                    set terminating_indices [inline_code_end $text $start $backticks]
+                    if {$terminating_indices ne {}} {
                         set stop [expr {[lindex $terminating_indices 0] - 1}]
 
                         set sub [string trim [string range $text $start $stop]]
 
-                        append result [my ProcessLiteral $sub]
                         set index [expr [lindex $terminating_indices 1] + 1]
+                        set suffix [inline_math_suffix $text $index]
+                        if {$suffix eq {}} {
+                            append result [my ProcessLiteral $sub]
+                        } else {
+                            set fallback $sub
+                            if {[dict exists $suffix fallback]} {
+                                set fallback [dict get $suffix fallback]
+                            }
+                            append result [my ProcessMath $sub $fallback $scope]
+                            set index [dict get $suffix end]
+                        }
                     } else {
                         # Solitary ` surrounded by whitespace.
                         # TODO - escape it?

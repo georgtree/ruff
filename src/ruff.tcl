@@ -340,6 +340,52 @@ namespace eval ruff {
         * All other lines begin a normal paragraph. The paragraph ends with
         a line of one of the above types.
 
+        ### Inline mathematics
+
+        Append `{math}` immediately after a backtick span to render its contents
+        as TeX mathematics. Ordinary code spans are unchanged. For example:
+
+        ```nolang
+        Coordinate `x_1`{math} and ratio `\frac{x_1}{x_2}`{math "x_1/x_2"}.
+        ```
+
+        The optional fallback is plain text for nroff and other non-math formatters.
+        Without it, the TeX source is printed literally. The annotation is a Tcl
+        list, not a script: quote or brace a fallback containing spaces, and use
+        a braced fallback to preserve backslashes. An explicit empty fallback
+        produces no text. No variable or command substitution is performed.
+        Recognized but malformed math annotations produce an error. Unknown
+        annotations are left as ordinary text. Whitespace before `{math}` prevents
+        recognition. Code spans can use matching runs of multiple backticks.
+
+        Inline math works in paragraphs, headings, parameter descriptions, table
+        cells, namespace and class preambles, and procedure/method documentation.
+        Fenced code and preformatted examples are unchanged. Inside tables, pipes
+        within the code span or its fallback do not separate cells:
+
+        ```nolang
+        | Expression | Meaning |
+        |---|---|
+        | `|x|`{math "abs(x)"} | Absolute value |
+        ```
+
+        Output handling:
+
+        - Sphinx emits its native math role. Enable `sphinx.ext.mathjax` (or
+          `sphinx.ext.imgmath`) in the generated `conf.py` before building.
+        - Standalone HTML emits MathJax inline delimiters and loads MathJax only
+          on pages containing math. The default script is the MathJax 3 bundle
+          from jsDelivr. Set `-mathjaxpath` (`--mathjax-path` on the CLI) to a local
+          or alternative script URL. An empty value disables script insertion.
+          Local MathJax assets must be installed alongside the generated pages.
+        - Markdown emits dollar-delimited TeX; the consuming Markdown renderer
+          must support math. Literal pipes become TeX vertical-bar commands so
+          they do not split Markdown table columns.
+        - AsciiDoc emits `latexmath` macros and the `stem` attribute. Its consumer
+          must support LaTeX STEM rendering.
+        - Nroff prints the fallback or TeX source as text. Table widths are computed
+          from that text, not the original annotation.
+
         ### Tables
 
         Ruff supports basic Markdown-formatted tables with a header and
@@ -1486,6 +1532,51 @@ proc ruff::private::sift_names {names} {
     return $namespaces
 }
 
+# Return matching, equal-length code delimiters, or an empty list.
+proc ruff::private::inline_code_end {text start ticks} {
+    foreach indices [regexp -all -inline -indices -start $start {`+} $text] {
+        lassign $indices a b
+        if {$b-$a+1 == [string length $ticks]} {
+            return [list $a $b]
+        }
+    }
+    return
+}
+
+# Parse a literal annotation, never evaluate it as a script. The optional
+# fallback is one Tcl list element (quoted or braced for spaces).
+proc ruff::private::inline_math_suffix {text start} {
+    set tail [string range $text $start end]
+    if {![regexp {^\{math(?:[ \t]|\}|$)} $tail]} {
+        return
+    }
+    for {set i [expr {$start+1}]} {$i < [string length $text]} {incr i} {
+        if {[string index $text $i] ne "\}"} {
+            continue
+        }
+        set slashes 0
+        for {set j [expr {$i-1}]} {$j > $start && [string index $text $j] eq "\\"} {incr j -1} {
+            incr slashes
+        }
+        if {$slashes % 2} {
+            continue
+        }
+        set content [string range $text [expr {$start+1}] [expr {$i-1}]]
+        if {[catch {llength $content} n]} {
+            continue
+        }
+        if {$n ni {1 2}} {
+            error {inline math expects {math} or {math "fallback"}}
+        }
+        set result [dict create end [expr {$i+1}]]
+        if {$n == 2} {
+            dict set result fallback [lindex $content 1]
+        }
+        return $result
+    }
+    error {unterminated inline math annotation}
+}
+
 proc ruff::private::split_table_row {line} {
     # Splits a line assuming Markdown table row syntax
     #   line - presumed to have Markdown table row syntax
@@ -1516,6 +1607,12 @@ proc ruff::private::split_table_row {line} {
                 }
             } elseif {$code eq $run} {
                 set code {}
+                set suffix [inline_math_suffix $line [expr {$i+1}]]
+                if {$suffix ne {}} {
+                    append cell $run [string range $line [expr {$i+1}] [expr {[dict get $suffix end]-1}]]
+                    set i [expr {[dict get $suffix end]-1}]
+                    continue
+                }
             }
             append cell $run
         } elseif {$ch eq "|" && $code eq {}} {
@@ -3522,6 +3619,10 @@ proc ruff::document {namespaces args} {
     #  locale for a language, create a message catalog file in the `msgs`
     #  directory using the provided `de.msg` as a template. Only supported by the
     #  HTML formatter.
+    # -mathjaxpath URL - MathJax script URL/path for standalone HTML inline math.
+    #  Defaults to the MathJax 3 tex-mml-chtml bundle on jsDelivr. An empty string
+    #  disables script insertion when the embedding page loads MathJax itself.
+    #  Sphinx uses its own conf.py configuration instead.
     # -makeindex BOOLEAN - if true, an index page is generated for classes
     #  and methods. Default value is true. Not supported by all formatters.
     # -navigation OPT - Controls navigation box behaviour when
@@ -4251,6 +4352,10 @@ proc ruff::private::parse_options {argv} {
         -r - --recurse {
             # Recurse passed namespaces.
             lappend options -recurse $arg
+        }
+        --mathjax-path:URL {
+            # MathJax script URL/path for standalone HTML inline math.
+            lappend options -mathjaxpath $arg
         }
         --nroff-table-width:COLUMNS {
             # Maximum Nroff table width, including borders and padding.

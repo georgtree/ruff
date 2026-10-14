@@ -279,7 +279,13 @@ oo::class create ruff::formatter::Markdown {
         # and a list of cell alignments respectively.
 
         # Markdown->Markdown. Just spit out the original lines
-        append Document \n [join [dict get $table lines] \n] \n
+        foreach line [dict get $table lines] {
+            if {[string first {math} $line] >= 0} {
+                set line [my FormatInline $line $scope]
+            }
+            append Document \n $line
+        }
+        append Document \n
     }
 
     method AddBullets {content scope} {
@@ -372,6 +378,12 @@ oo::class create ruff::formatter::Markdown {
         # Returns markup for emphasized text.
 
         return [string cat $delim [my FormatInline $text] $delim]
+    }
+
+    method ProcessMath {text fallback scope} {
+        # Pipes must not become Markdown table delimiters.
+        set text [string map [list {\|} {\Vert } | {\vert }] $text]
+        return [string cat {$} $text {$}]
     }
 
     method ProcessLiteral {text} {

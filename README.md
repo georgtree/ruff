@@ -195,3 +195,25 @@ tclsh tests/nroff-tables.test
 Tcllib must be available on `auto_path` or `TCLLIBPATH`. Tcl 9 enables the class
 preamble integration test. If `groff` is available, the suite also checks rendered
 UTF-8 man output without a table preprocessor.
+
+## Inline math
+
+Append `{math}` directly to a backtick span:
+
+```text
+The coordinate `x_1`{math} and ratio `\frac{x_1}{x_2}`{math "x_1/x_2"}.
+```
+
+This works in prose, parameter descriptions and tables, including namespace/class
+preambles and procedure/method documentation. The optional quoted or braced text
+is the nroff fallback; without it, nroff prints the TeX source. Ordinary code spans
+and fenced examples remain unchanged.
+
+Sphinx emits `:math:` roles; enable `sphinx.ext.mathjax` or `sphinx.ext.imgmath` in
+`conf.py`. Standalone HTML loads MathJax on pages containing inline math; use
+`-mathjaxpath` (CLI `--mathjax-path`) to select a local/custom script, or an empty
+value to leave script loading to the hosting page. Markdown emits dollar-delimited
+math, and AsciiDoc emits LaTeX STEM macros; the consuming renderer must support them.
+
+Run `tclsh tests/inline-math.test` and `tclsh tests/nroff-tables.test` with Tcllib
+available. The inline suite also builds Sphinx HTML when `sphinx-build` is on PATH.

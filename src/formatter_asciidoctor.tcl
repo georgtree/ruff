@@ -7,6 +7,7 @@ oo::class create ruff::formatter::Asciidoctor {
     superclass ::ruff::formatter::Formatter
 
     # Data members
+    variable MathUsed;        # Emit STEM configuration when needed
     variable Document;        # Current document
     variable DocumentNamespace; # Namespace being documented
     variable Footer;          # Common footer
@@ -75,6 +76,7 @@ oo::class create ruff::formatter::Asciidoctor {
 
         next $ns
 
+        set MathUsed false
         set Document ""
         set DocumentNamespace $ns
 
@@ -88,6 +90,7 @@ oo::class create ruff::formatter::Asciidoctor {
         my Navigation $DocumentNamespace
         append Document $Footer
 
+        if {$MathUsed} {set Document ":stem: latexmath\n\n$Document"}
         set doc $Document
         set Document ""
 
@@ -520,6 +523,12 @@ oo::class create ruff::formatter::Asciidoctor {
                 error "Invalid emphasis delimiter length [string length $delim]."
             }
         }
+    }
+
+    method ProcessMath {text fallback scope} {
+        set MathUsed true
+        set text [string map [list {\|} {\Vert } | {\vert } {]} {\]}] $text]
+        return [string cat {latexmath:[} $text {]}]
     }
 
     method ProcessLiteral {text} {
