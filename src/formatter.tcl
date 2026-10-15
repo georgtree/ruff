@@ -601,6 +601,14 @@ oo::class create ruff::formatter::Formatter {
         }
     }
 
+    method AddRawHtml {lines scope} {
+        # Adds a standalone raw HTML block.
+        # lines - Literal HTML lines.
+        # scope - Documentation scope.
+        # The default omits HTML for formats without HTML support.
+        return
+    }
+
     method AddParagraphs {paras {scope {}}} {
         # Calls the formatter for each of the passed paragraphs.
         # paras - A flat list of pairs with the first element
@@ -620,6 +628,9 @@ oo::class create ruff::formatter::Formatter {
                 }
                 definitions {
                     my AddDefinitions $content $scope none
+                }
+                rawhtml {
+                    my AddRawHtml $content $scope
                 }
                 table {
                     my AddTable $content $scope

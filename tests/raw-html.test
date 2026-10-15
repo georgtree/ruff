@@ -1,0 +1,121 @@
+package require tcltest 2
+namespace import ::tcltest::*
+source [file join [file dirname [info script]] .. src ruff.tcl]
+testConstraint sphinx [expr {[auto_execok sphinx-build] ne {}}]
+namespace eval ::rawtest {
+    variable dir [file join [::tcltest::temporaryDirectory] raw-html-[pid]]
+    namespace eval fixture {}
+    variable source {<details open>
+<summary>Zoom &amp; pan</summary>
+
+![Demo](demo.gif)
+
+**Description** of the demo.
+
+</details>}
+    proc render {format text} {
+        variable dir
+        ruff::document ::rawtest::fixture -format $format -preamble $text \
+            -outdir $dir -outfile result.rst -makeindex false
+        set f [open [file join $dir result.rst]]
+        try {return [read $f]} finally {close $f}
+    }
+    proc body {text} {
+        dict get [ruff::private::parse_lines [split $text \n] ::rawtest docstring] body
+    }
+}
+
+test raw-html-1 {disclosure boundaries are raw, body remains Markdown} -body {
+    set parsed [::rawtest::body $::rawtest::source]
+    set types {}
+    foreach {type content} $parsed {lappend types $type}
+    set types
+} -result {rawhtml paragraph paragraph rawhtml}
+
+test raw-html-2 {Sphinx emits indented raw directives without escaping HTML} -body {
+    set doc [::rawtest::render sphinx $::rawtest::source]
+    list [regexp -all {\.\. raw:: html} $doc] \
+        [expr {[string first "   <details open>\n   <summary>Zoom &amp; pan</summary>" $doc] >= 0}] \
+        [string match {*image:: demo.gif*} $doc] \
+        [string match {*\*\*Description\*\**} $doc] \
+        [string match {*   </details>*} $doc]
+} -result {2 1 1 1 1}
+
+foreach format {html markdown} {
+    test raw-html-3-$format {HTML and Markdown preserve standalone HTML} -body {
+        set doc [::rawtest::render $format $::rawtest::source]
+        list [string match {*<details open>*} $doc] \
+            [string match {*<summary>Zoom &amp; pan</summary>*} $doc] \
+            [string match {*</details>*} $doc] [string match {*demo.gif*} $doc]
+    } -result {1 1 1 1}
+}
+
+test raw-html-4 {nroff omits HTML while retaining ordinary body text} -body {
+    set doc [::rawtest::render nroff $::rawtest::source]
+    list [string match {*<details*} $doc] [string match {*Zoom &amp;*} $doc] \
+        [string match {*Description*} $doc]
+} -result {0 0 1}
+
+test raw-html-5 {arbitrary tags, literal contents, blank and EOF boundaries} -body {
+    ::rawtest::body {<custom-box data-label="a > b">
+*not Markdown*
+</custom-box>
+
+After}
+} -result {rawhtml {{<custom-box data-label="a > b">} {*not Markdown*} </custom-box>} paragraph After}
+
+test raw-html-6 {fenced and indented HTML remain code} -body {
+    set types {}
+    foreach source [list "```html\n<div>\n```" "    <div>\n    </div>"] {
+        lappend types [lindex [::rawtest::body $source] 0]
+    }
+    set types
+} -result {fenced preformatted}
+
+test raw-html-7 {inline tags and autolinks remain normal paragraphs} -body {
+    set types {}
+    foreach source {{This is <span>important</span> text.} {<https://example.org>} {<me@example.org>}} {
+        lappend types [lindex [::rawtest::body $source] 0]
+    }
+    set types
+} -result {paragraph paragraph paragraph}
+
+test raw-html-8 {format guards still filter raw blocks} -body {
+    set source "#ruffopt includedformats sphinx\n<div>\nOnly HTML\n</div>\n\n#ruffopt excludedformats {}\nVisible"
+    list [string match {*Only HTML*} [::rawtest::render sphinx $source]] \
+        [string match {*Only HTML*} [::rawtest::render markdown $source]] \
+        [string match {*Visible*} [::rawtest::render nroff $source]]
+} -result {1 0 1}
+
+test raw-html-9 {comments are literal blocks} -body {
+    ::rawtest::body "<!-- example\ncomment -->\n\nBody"
+} -result {rawhtml {{<!-- example} {comment -->}} paragraph Body}
+
+test raw-html-10 {HTML terminates preceding paragraph without losing content} -body {
+    ::rawtest::body "Before\n<hr>\n\nAfter"
+} -result {paragraph Before rawhtml <hr> paragraph After}
+
+test raw-html-11 {nested boundaries remain literal and Markdown stays outside blocks} -body {
+    set doc [::rawtest::render sphinx "<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nBody\n\n</details>\n</details>"]
+    list [regexp -all {\.\. raw:: html} $doc] [regexp -all {   </details>} $doc]
+} -result {3 2}
+
+test raw-html-12 {shorter indentation does not remove HTML characters} -body {
+    ::rawtest::body "  <div>\n</div>"
+} -result {rawhtml {<div> </div>}}
+
+test raw-html-sphinx-build-1 {Sphinx HTML contains disclosure and copied image} \
+    -constraints sphinx -body {
+    ::rawtest::render sphinx $::rawtest::source
+    set f [open [file join $::rawtest::dir demo.gif] wb]
+    puts -nonewline $f [binary decode base64 R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==]
+    close $f
+    exec {*}[auto_execok sphinx-build] -q -W -E -b html $::rawtest::dir [file join $::rawtest::dir html]
+    set f [open [file join $::rawtest::dir html result.html]]
+    try {set html [read $f]} finally {close $f}
+    list [regexp {(?s)<details open>.*<summary>Zoom &amp; pan</summary>.*<img[^>]*demo.gif.*</details>} $html] \
+        [file exists [file join $::rawtest::dir html _images demo.gif]]
+} -result {1 1}
+
+file delete -force $::rawtest::dir
+cleanupTests

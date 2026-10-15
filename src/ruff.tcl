@@ -1054,6 +1054,36 @@ namespace eval ruff {
         fenced examples remain literal. No preamble conversion or temporary procedure
         rewriting is needed.
 
+        ### Raw HTML blocks
+
+        A standalone complete HTML tag starts a raw HTML block. The block
+        continues until the next blank line or the end of the documentation.
+        An HTML comment opener (`<!--`) also starts a raw block. Indented
+        and fenced code blocks retain their usual meaning.
+
+        ```markdown
+        <details>
+        <summary>Interactive example</summary>
+
+        ![Demonstration](images/demo.gif)
+
+        </details>
+        ```
+
+        HTML and Markdown output preserve these blocks literally. Sphinx
+        emits `.. raw:: html` directives; its HTML builder must permit raw
+        content. Other Ruff formatters omit raw blocks. Text inside a raw
+        block, including summary titles, is omitted along with its tags.
+        Put portable descriptions outside raw blocks if they should appear
+        in non-HTML output.
+
+        Separate ordinary Markdown content from raw HTML with blank lines.
+        Within a raw block, Markdown is not interpreted. Ruff does not validate
+        HTML nesting or balance tags. This is block passthrough, not a full
+        HTML parser: opening tags must be complete on their first line, and
+        blank lines terminate blocks even inside HTML comments or elements.
+        Existing format inclusion guards continue to apply.
+
         ### Sphinx formatter
 
         The Sphinx output formatter generates documentation in reStructuredText
@@ -1690,6 +1720,14 @@ proc ruff::private::parse_line {line mode current_indent}  {
                     Text [string range $line $preformatted_min_indent end]]
     }
 
+    # Standalone HTML starts a raw block. Require a complete tag so that
+    # autolinks such as <https://example.org> remain normal inline markup.
+    # Preformatted indentation has already been handled above.
+    if {[regexp {^(?:</?[A-Za-z][A-Za-z0-9:-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^ \t<>"'=]+))?)*[ \t]*/?>)(?:.*>)?$} $text] ||
+        [string match {<!--*} $text]} {
+        return [list Type rawhtml Indent $indent Text $text]
+    }
+
     # Note that $text starts AND ends with a non-whitespace character.
     # Also note order of match cases in switch is importent.
     switch -regexp -matchvar matches -indexvar indices -- $text {
@@ -1932,6 +1970,7 @@ proc ruff::private::parse_seealso_state {statevar} {
         set line [lindex $state(lines) $state(index)]
         set state(parsed) [parse_line $line $state(mode) $block_indent]
         switch -exact -- [dict get $state(parsed) Type] {
+            rawhtml -
             heading -
             fence -
             bullet -
@@ -1979,6 +2018,7 @@ proc ruff::private::parse_synopsis_state {statevar} {
         set line [lindex $state(lines) $state(index)]
         set state(parsed) [parse_line $line $state(mode) $block_indent]
         switch -exact -- [dict get $state(parsed) Type] {
+            rawhtml -
             heading -
             fence -
             bullet -
@@ -2029,6 +2069,7 @@ proc ruff::private::parse_returns_state {statevar} {
         set state(parsed) [parse_line $line $state(mode) $block_indent]
         set text [dict get $state(parsed) Text]
         switch -exact -- [dict get $state(parsed) Type] {
+            rawhtml -
             heading -
             fence -
             bullet -
@@ -2094,6 +2135,7 @@ proc ruff::private::parse_bullets_state {statevar} {
                 # Not part of list item, even within a bullet, a la GFM
                 break
             }
+            rawhtml -
             heading -
             returns -
             fence -
@@ -2251,6 +2293,7 @@ proc ruff::private::parse_definitions_state {statevar} {
         }
         set text [dict get $state(parsed) Text]
         switch -exact -- $type {
+            rawhtml -
             heading -
             returns -
             fence -
@@ -2321,6 +2364,28 @@ proc ruff::private::parse_definitions_state {statevar} {
     }
 }
 
+proc ruff::private::parse_rawhtml_state {statevar} {
+    # Collect a standalone HTML block through the next blank line or EOF.
+    # Contents are literal: Markdown and HTML nesting are not interpreted.
+    upvar 1 $statevar state
+
+    set indent [dict get $state(parsed) Indent]
+    set lines {}
+    while {$state(index) < $state(nlines)} {
+        set line [lindex $state(lines) $state(index)]
+        if {[string trim $line] eq ""} {
+            break
+        }
+        regexp {^[ \t]*} $line leading
+        set strip [expr {min($indent, [string length $leading])}]
+        lappend lines [string range $line $strip end]
+        incr state(index)
+    }
+    unset state(parsed)
+    set state(state) body
+    lappend state(body) rawhtml $lines
+}
+
 proc ruff::private::parse_normal_state {statevar} {
     upvar 1 $statevar state
 
@@ -2330,6 +2395,7 @@ proc ruff::private::parse_normal_state {statevar} {
         set line [lindex $state(lines) $state(index)]
         set state(parsed) [parse_line $line $state(mode) $block_indent]
         switch -exact -- [dict get $state(parsed) Type] {
+            rawhtml -
             heading -
             fence -
             bullet -
@@ -2372,6 +2438,7 @@ proc ruff::private::parse_blockquote_state {statevar} {
         set line [lindex $state(lines) $state(index)]
         set state(parsed) [parse_line $line $state(mode) $block_indent]
         switch -exact -- [dict get $state(parsed) Type] {
+            rawhtml -
             heading -
             fence -
             bullet -
@@ -2415,7 +2482,7 @@ proc ruff::private::parse_lines {lines scope {mode proc}} {
     #           Not applicable if $mode is `docstring`.
     # body - The main body stored as a list of alternating type and
     #        content elements. The type may be one of `heading`, `blockquote`,
-    #        `paragraph`, `list`, `definitions`, `table` or `preformatted`.
+    #        `paragraph`, `list`, `definitions`, `table`, `rawhtml` or `preformatted`.
     # seealso - The *See also* section containing a list of program element
     #           references. Not applicable if $mode is `docstring`.
     # returns - A paragraph describing the return value.
@@ -2477,6 +2544,7 @@ proc ruff::private::parse_lines {lines scope {mode proc}} {
             seealso      { parse_seealso_state state }
             synopsis     { parse_synopsis_state state }
             table        { parse_table_state state }
+            rawhtml      { parse_rawhtml_state state }
             continuation {
                 # TBD - See if we can get rid of continuation state
                 # we do not really use this state.

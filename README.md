@@ -237,3 +237,35 @@ math block and `#ruffopt includedformats nroff` for your existing text equation,
 then restore the enclosing format selection. Other code fences remain unchanged.
 
 Run `tclsh tests/display-math.test` for the display-math regression suite.
+
+## Standalone raw HTML
+
+Standalone HTML blocks are preserved in HTML and Markdown output and emitted as
+`.. raw:: html` directives in Sphinx output. Other formatters omit them. Inline
+HTML support is unchanged.
+
+For example, the same disclosure markup can be used in a GitHub README and a
+Ruff preamble:
+
+```markdown
+<details>
+<summary>Interactive demonstration</summary>
+
+![Demonstration](images/demo.gif)
+
+</details>
+```
+
+A complete opening or closing tag on its own line starts a block; an opening
+and closing tag with content on the same line is also accepted. HTML comments
+can start blocks too. Blocks end at a blank line or EOF. Keep blank lines around
+Markdown content: everything within a raw block is passed through literally.
+Ruff does not validate or balance HTML tags. Tags in fenced or indented code
+remain examples. Format inclusion guards still apply.
+
+Non-HTML output omits the entire raw block, including summary text. Put any
+portable description in a separate Markdown paragraph. Sphinx must allow raw
+content for its HTML builder to display it.
+
+Run `tclsh tests/raw-html.test` with Tcllib available. The suite also checks
+Sphinx HTML generation and image copying when `sphinx-build` is on PATH.

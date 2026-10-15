@@ -218,6 +218,16 @@ oo::class create ruff::formatter::Sphinx {
         return ""
     }
 
+    method AddRawHtml {lines scope} {
+        # See [Formatter.AddRawHtml].
+        append Document "\n.. raw:: html\n\n"
+        foreach line $lines {
+            append Document "   " $line "\n"
+        }
+        append Document "\n"
+        return
+    }
+
     method AddParagraph {lines scope} {
         # See [Formatter.AddParagraph].
         #  lines  - The paragraph lines.

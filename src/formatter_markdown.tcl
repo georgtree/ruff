@@ -190,6 +190,12 @@ oo::class create ruff::formatter::Markdown {
         return $html
     }
 
+    method AddRawHtml {lines scope} {
+        # See [Formatter.AddRawHtml].
+        append Document "\n[join $lines \n]\n\n"
+        return
+    }
+
     method AddParagraph {lines scope} {
         # See [Formatter.AddParagraph].
         #  lines  - The paragraph lines.
